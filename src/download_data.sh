@@ -1,6 +1,6 @@
 #!/bin/bash
-NANCY_USERNAME=""
-NANCY_PASSWORD=""
+NANCY_USERNAME=$1
+NANCY_PASSWORD=$2
 
 mkdir data
 mkdir weights

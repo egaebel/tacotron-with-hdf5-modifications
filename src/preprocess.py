@@ -38,6 +38,21 @@ ivocab[0] = '<pad>'
     object to the dictionary
     This contains the speaker id (an int) for each utterance
 """
+def prepare_expanse_truncated():
+    truncated_size = 4000
+    expanse_root_dir = "../../../audiobook-dataset-creator/src/expanse-data/"
+    audio_files_dir = os.path.join(expanse_root_dir, "all-expanse-audio")
+    prompts_dir = os.path.join(expanse_root_dir, "all-expanse-sentences")
+    prompts = list()
+    for prompt_file_name in sorted(os.listdir(prompts_dir)):
+        with open(os.path.join(prompts_dir, prompt_file_name)) as prompt_file:
+            prompts.append(prompt_file.read())[:truncated_size]
+    audio_files = [
+        os.path.join(audio_files_dir, audio_file_name)
+        for audio_file_name in sorted(os.listdir(audio_files_dir))][:truncated_size]
+
+    return {'prompts': prompts, 'audio_files': audio_files}
+
 def prepare_expanse():
     expanse_root_dir = "../../../audiobook-dataset-creator/src/expanse-data/"
     audio_files_dir = os.path.join(expanse_root_dir, "all-expanse-audio")
@@ -134,6 +149,7 @@ def prepare_vctk():
 prepare_functions = {
         'arctic': prepare_arctic,
         'expanse': prepare_expanse,
+        'expanse-truncated': prepare_expanse_truncated,
         'nancy': prepare_nancy,
         'vctk': prepare_vctk
 }
@@ -173,35 +189,33 @@ def save_to_npy(texts, text_lens, mels, stfts, speech_lens, filename):
         print(name, inp.shape)
         np.save(name, inp, allow_pickle=False)
 
-def create_hdf5_files(max_freq_length, filename):
+def create_hdf5_file(max_freq_length, filename):
     short_names = 'mels', 'stfts'
-    names = ['data/%s/%s' % (filename, name) for name in short_names]
+    filepath = "data/%s/%s" % (filename, "data")
 
     atoms = [tables.Float16Atom(), tables.Float16Atom()]
     sizes = [
         (0, max_freq_length, 80 * audio.r),
         (0, max_freq_length, 1025 * audio.r)]
-    for short_name, name, atom, size in zip(short_names, names, atoms, sizes):
-        try:
-            os.remove(name)
-        except:
-            pass
-        tables_file = tables.open_file(name, mode='w')
-        tables_file.create_earray(tables_file.root, "data", atom, size)
-        tables_file.close()
+    tables_file = tables.open_file(filepath, mode='w')
+    for short_name, atom, size in zip(short_names, atoms, sizes):
+        print("Creating earray at /root/%s" % short_name)
+        tables_file.create_earray(tables_file.root, short_name, atom, size)
+    print("Tables file created: %s" % tables_file)
+    tables_file.close()
 
-def append_to_hdf5(mels, stfts, filename):
+def append_to_hdf5_dataset(mels, stfts, filename):
     inputs = mels, stfts
     short_names = 'mels', 'stfts'
-    names = ['data/%s/%s' % (filename, name) for name in short_names]
+    filepath = "data/%s/%s" % (filename, "data")
     atoms = [tables.Float16Atom(), tables.Float16Atom()]
 
-    for short_name, name, inp, atom in zip(short_names, names, inputs, atoms):
-        tables_file = tables.open_file(name, mode='a')
-        tables_file.root.data.append(inp)
-        tables_file.close()
+    tables_file = tables.open_file(filepath, mode='a')
+    for short_name, inp, atom in zip(short_names, inputs, atoms):
+        tables_file.get_node("/%s" % short_name).append(inp)
+    tables_file.close()
 
-def save_to_hdf5(array, filename):
+def add_data_to_hdf5(array, short_name, filename):
     """
     inputs = texts, text_lens, speech_lens
     names = 'texts', 'text_lens', 'speech_lens'
@@ -211,10 +225,10 @@ def save_to_hdf5(array, filename):
         print(name, inp.shape)
         np.save(name, inp, allow_pickle=False)
     """
-    tables_file = tables.open_file(filename, mode='w')
+    tables_file = tables.open_file(filename, mode='a')
     carray = tables_file.create_carray(
         tables_file.root,
-        "data",
+        short_name,
         tables.Atom.from_dtype(array.dtype),
         array.shape)
     carray[:] = array
@@ -243,16 +257,12 @@ def preprocess(data, data_name, sr=16000):
     print("num_examples: %s" % str(num_examples))
     print("max_freq_length: %s" % str(max_freq_length))
     print("1025*audio.r: %s" % str(1025*audio.r))
-    # Added
+
     mels = np.zeros((example_batch_size, max_freq_length, 80*audio.r), dtype=np.float16)
     stfts = np.zeros((example_batch_size, max_freq_length, 1025*audio.r), dtype=np.float16)
-    """
-    stfts = np.zeros((num_examples, max_freq_length, 1025*audio.r), dtype=np.float16)
-    mels = np.zeros((num_examples, max_freq_length, 80*audio.r), dtype=np.float16)
-    """
 
-    # Added
-    create_hdf5_files(max_freq_length, data_name)
+    # Old approach for separate data sets
+    # create_hdf5_file(max_freq_length, data_name)
 
     count = 0
     for text, audio_file in tqdm(
@@ -266,44 +276,25 @@ def preprocess(data, data_name, sr=16000):
             text_lens.append(len(text))
             speech_lens.append(mel.shape[0])
 
-            # Added
             mels[count % example_batch_size] = mel
             stfts[count % example_batch_size] = stft
 
-
-            # Added comment out
-            # mels[count] = mel
-            # stfts[count] = stft
-
             count += 1
 
-            # Added
             if count % example_batch_size == 0:
-                append_to_hdf5(mels, stfts, data_name)
+                # Old approach for separate data sets
+                # append_to_hdf5_dataset(mels, stfts, data_name)
 
+    # Old approach for separate data sets
+    append_to_hdf5_dataset(mels[:count % example_batch_size], stfts[:count % example_batch_size], data_name)
 
-    # Added
-    append_to_hdf5(mels[:count % example_batch_size], stfts[:count % example_batch_size], data_name)
-
-    # Added comment out
-    """
-    mels = mels[:len(texts)]
-    stfts = stfts[:len(texts)]
-    """
-
-    # Added comment out
-    """
-    save_to_npy(texts, text_lens, mels, stfts, speech_lens, data_name)
-    """
-
-    # Added
     inputs = pad_to_dense(texts), np.array(text_lens), np.array(speech_lens)
     short_names = 'texts', 'text_lens', 'speech_lens'
-    filenames = ['data/%s/%s' % (data_name, name) for name in short_names]
-    for filename, inp in zip(filenames, inputs):
-        print("Saving to hdf5: %s, %s" % (filename, inp.shape))
+    filepath = "data/%s/%s" % (data_name, "data")
+    for short_name, inp in zip(short_names, inputs):
+        print("Saving to hdf5: %s, %s" % (filepath, inp.shape))
         print("input: %s" % inp)
-        save_to_hdf5(inp, filename)
+        add_data_to_hdf5(inp, short_name, filepath)
 
     if 'speakers' in data:
         np.save('data/%s/speakers.npy' % data_name, data['speakers'], allow_pickle=False)
@@ -315,7 +306,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('dataset', help='specify the name of the dataset to preprocess')
     args = parser.parse_args()
-    
+   
     if args.dataset not in prepare_functions:
         raise NotImplementedError('No prepare function exists for the %s dataset' % args.dataset)
     sr = 24000 if args.dataset == 'vctk' else 16000

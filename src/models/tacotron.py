@@ -28,7 +28,7 @@ class Config(object):
     cap_grads = 5
 
     init_lr = 0.0005
-    annealing_rate = 1
+    annealing_rate = 0.75
 
     batch_size = 32
 
@@ -81,6 +81,7 @@ class Tacotron(object):
 
         if train:
             if config.scheduled_sample:
+                print("if train if config.scheduled_sample: %s" % str((inputs['mel'], inputs['speech_length'], config.scheduled_sample)))
                 decoder_helper = helper.ScheduledOutputTrainingHelper(
                         inputs['mel'], inputs['speech_length'], config.scheduled_sample)
             else:
@@ -109,6 +110,7 @@ class Tacotron(object):
 
         # extract character representations from embedding
         with tf.variable_scope('embedding', initializer=tf.contrib.layers.xavier_initializer()):
+            print("\n\nembedding: shape: %s" % str((config.vocab_size, config.embed_dim)))
             embedding = tf.get_variable('embedding',
                     shape=(config.vocab_size, config.embed_dim), dtype=tf.float32)
             embedded_inputs = tf.nn.embedding_lookup(embedding, inputs['text'])
@@ -125,6 +127,7 @@ class Tacotron(object):
 
         # process text input with CBHG module 
         with tf.variable_scope('encoder'):
+            print("\n\nencoder: inputs: %s" % str(inputs))
             pre_out = self.pre_net(embedded_inputs, dropout=config.char_dropout_prob, train=train)
             tf.summary.histogram('pre_net_out', pre_out)
 
@@ -132,6 +135,7 @@ class Tacotron(object):
 
         # pass through attention based decoder
         with tf.variable_scope('decoder'):
+            print("\n\ndecoder: inputs: %s\n\n" % str(inputs))
             dec = self.create_decoder(encoded, inputs, speaker_embed, train)
             (seq2seq_output, _), attention_state, _ = \
                     decoder.dynamic_decode(dec, maximum_iterations=config.max_decode_iter)

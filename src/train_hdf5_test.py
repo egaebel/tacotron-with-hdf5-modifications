@@ -1,5 +1,4 @@
 import tensorflow as tf
-# import tensorflow.contrib.eager as tfe
 import numpy as np
 import sys
 import os
@@ -22,51 +21,76 @@ def train(model, config, num_steps=1000000):
     ivocab = meta['vocab']
     config.vocab_size = len(ivocab)
 
-
-    print("Building dataset...")
-    loader, reader, names, shapes, types = data_input.build_dataset_with_hdf5(
-        os.path.join(config.data_path, "data"))
-    print("Built dataset!")
-
     with tf.Session() as sess:
 
-        batch_inputs, stft_mean, stft_std = data_input.build_hdf5_dataset(
-            os.path.join(config.data_path, "data"), sess, loader, names, shapes, types, ivocab)
+        # Added comment out
+        """
+        inputs, names, num_speakers, stft_mean, stft_std = \
+                data_input.load_from_npy(config.data_path)
+        """
 
+        # Added
+        # And THEN commented out
+        """
+        print("Loading inputs...")
+        inputs, names, num_speakers = data_input.load_from_hdf5(config.data_path)
+        print("Loaded all inputs!")
+        """
+
+        # Added comment out
+        """
+        config.num_speakers = num_speakers
+        """
+
+        # Added comment out
+        # save the mean and std as tensorflow variables so they are saved with the weights
+        """
         tf.Variable(stft_mean, name='stft_mean')
         tf.Variable(stft_std, name='stft_std')
+        """
 
-        print("Initializing model...")
-        # initialize model
-        model = model(config, batch_inputs, train=True)
-        print("Model initialized!")
+        print("Building dataset...")
+        # Added comment out
+        """
+        batch_inputs = data_input.build_dataset(sess, inputs, names)
+        """
 
-        train_writer = tf.summary.FileWriter('log/' + config.save_path + '/train', sess.graph)
-
-        tf.global_variables_initializer().run()
-        coord = tf.train.Coordinator()
-        print("Starting queue runners...")
-        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-        print("Started queue runners!")
-
-        saver = tf.train.Saver(max_to_keep=3, keep_checkpoint_every_n_hours=3)
-
-        if config.restore:
-            print('restoring weights')
-            latest_ckpt = tf.train.latest_checkpoint(
-                'weights/' + config.save_path[:config.save_path.rfind('/')]
-            )
-            if RESTORE_FROM is None:
-                if latest_ckpt is not None:
-                    saver.restore(sess, latest_ckpt)
-            else:
-                saver.restore(sess, 'weights/' + config.save_path + '-' + str(RESTORE_FROM))
-
-        lr = model.config.init_lr
-        annealing_rate = model.config.annealing_rate
-        
-        print("Looping over num_steps: %s" % str(num_steps))
+        # Added
+        batch_inputs, loader = data_input.build_dataset_with_hdf5(
+            os.path.join(config.data_path, "data"))
+        print("Built dataset!")
+        print("batch_inputs: %s" % str(batch_inputs))
         with loader.begin(sess):
+            print("Initializing model...")
+            # initialize model
+            model = model(config, batch_inputs, train=True)
+            print("Model initialized!")
+
+            train_writer = tf.summary.FileWriter('log/' + config.save_path + '/train', sess.graph)
+
+            tf.global_variables_initializer().run()
+            coord = tf.train.Coordinator()
+            print("Starting queue runners...")
+            threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+            print("Started queue runners!")
+
+            saver = tf.train.Saver(max_to_keep=3, keep_checkpoint_every_n_hours=3)
+
+            if config.restore:
+                print('restoring weights')
+                latest_ckpt = tf.train.latest_checkpoint(
+                    'weights/' + config.save_path[:config.save_path.rfind('/')]
+                )
+                if RESTORE_FROM is None:
+                    if latest_ckpt is not None:
+                        saver.restore(sess, latest_ckpt)
+                else:
+                    saver.restore(sess, 'weights/' + config.save_path + '-' + str(RESTORE_FROM))
+
+            lr = model.config.init_lr
+            annealing_rate = model.config.annealing_rate
+            
+            print("Looping over num_steps: %s" % str(num_steps))
             for _ in tqdm(range(num_steps)):
                 print("Running sess...")
                 out = sess.run([
@@ -104,8 +128,6 @@ def train(model, config, num_steps=1000000):
                     sample = audio.invert_spectrogram(output[0]*stft_std + stft_mean)
                     attention_plot = data_input.generate_attention_plot(alignments[0])
                     step = '_' + str(global_step)
-                    print("ideal: %s %s %s" % (str(step), str(ideal[None, :]), str(sr)))
-                    print("sample: %s %s %s" % (str(step), str(sample[None, :]), str(sr)))
                     merged = sess.run(tf.summary.merge(
                         [tf.summary.audio('ideal' + step, ideal[None, :], sr),
                          tf.summary.audio('sample' + step, sample[None, :], sr),
@@ -117,7 +139,6 @@ def train(model, config, num_steps=1000000):
 
             coord.request_stop()
             coord.join(threads)
-        reader.close()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -126,7 +147,7 @@ if __name__ == '__main__':
     parser.add_argument('-r', '--restore', type=bool, default=False)
     args = parser.parse_args()
 
-    from models.tacotron import Tacotron, Config
+    from models.tacotron_hdf5_test import Tacotron, Config
     model = Tacotron
     config = Config()
     config.data_path = 'data/%s/' % args.train_set
