@@ -14,6 +14,8 @@ import audio
 SAVE_EVERY = 5000
 RESTORE_FROM = None
 
+ANNEALING_STEPS = 500000
+
 def train(model, config, num_steps=1000000):
 
     sr = 24000 if 'vctk' in config.data_path else 16000
@@ -22,16 +24,30 @@ def train(model, config, num_steps=1000000):
     ivocab = meta['vocab']
     config.vocab_size = len(ivocab)
 
+    print("Sampling mean and std...")
+    stft_mean, stft_std, mel_mean, mel_std = data_input.get_stft_and_mel_std_and_mean_from_table(
+        os.path.join(config.data_path, "data"))
+    print("Sampled mean and std!")
 
     print("Building dataset...")
-    loader, reader, names, shapes, types = data_input.build_dataset_with_hdf5(
+    loader, reader, names, shapes, types = data_input.build_dataset_with_hdf5_table(
         os.path.join(config.data_path, "data"))
     print("Built dataset!")
 
     with tf.Session() as sess:
 
-        batch_inputs, stft_mean, stft_std = data_input.build_hdf5_dataset(
-            os.path.join(config.data_path, "data"), sess, loader, names, shapes, types, ivocab)
+        batch_inputs, stft_mean, stft_std = data_input.build_hdf5_dataset_from_table(
+            os.path.join(config.data_path, "data"), 
+            sess, 
+            loader, 
+            names, 
+            shapes, 
+            types, 
+            ivocab,
+            stft_mean,
+            stft_std,
+            mel_mean,
+            mel_std)
 
         tf.Variable(stft_mean, name='stft_mean')
         tf.Variable(stft_std, name='stft_std')
@@ -64,6 +80,11 @@ def train(model, config, num_steps=1000000):
 
         lr = model.config.init_lr
         annealing_rate = model.config.annealing_rate
+        if config.restore:
+            print("Restored global step: %s" % str(model.global_step.eval(sess)))
+            lr *= (annealing_rate**(model.global_step.eval(sess) // ANNEALING_STEPS))
+            print("Recovered learning rate: '%s'" % str(lr))
+        print("Using learning rate: '%s' and annealing rate: '%s'" % (lr, annealing_rate))
         
         print("Looping over num_steps: %s" % str(num_steps))
         with loader.begin(sess):
@@ -88,8 +109,10 @@ def train(model, config, num_steps=1000000):
                     print('loss exploded')
                     break
 
-                if global_step % 1000 == 0:
+                if global_step % ANNEALING_STEPS == 0:
+                    old_lr = lr
                     lr *= annealing_rate
+                    print("Updated learning rate from: %s to %s" % (str(old_lr), str(lr)))
 
                 if global_step % SAVE_EVERY == 0 and global_step != 0:
 

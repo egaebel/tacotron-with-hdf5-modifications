@@ -4,3 +4,12 @@ log
 weights
 __pycache__
 *.pyc
+output.txt
+output_1.txt
+texput.log
+data-h5dump.txt
+/bin/
+/include/
+/share/
+/lib/
+pip-selfcheck.json

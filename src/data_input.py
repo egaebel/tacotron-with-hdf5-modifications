@@ -15,30 +15,19 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+MELS_COL = "mels"
+STFTS_COL = "stfts"
+TEXTS_COL = "texts"
+TEXT_LENS_COL = "text_lens"
+SPEECH_LENS_COL = "speech_lens"
+
 BATCH_SIZE = 32
 BUFFER_SIZE = 1024
 SHUFFLE_BUFFER_SIZE = 10000
 
 MAX_TEXT_LEN = 140
 
-# def build_hdf5_dataset(file_name, sess, input_batch_inputs, loader):
 def build_hdf5_dataset(file_name, sess, loader, names, shapes, types, ivocab):
-    """
-    names = input_batch_inputs.keys()
-    inputs = [input_batch_inputs[name] for name in names]
-    placeholders = []
-    types = []
-    shapes = []
-    for inp in inputs:
-        placeholders.append(tf.placeholder(inp.dtype, inp.shape))
-        types.append(inp.dtype)
-        shapes.append(inp.shape)
-    """
-    """
-    types = [tf.float16, tf.int32, tf.float16, tf.int32, tf.int32]
-    shapes = [(180, 2050), (164), (180, 160), (), ()]
-    names = ["stft", "text", "mel", "text_length", "speech_length"]
-    """
 
     print("Obtaining means and stds....")
     stft_mean, stft_std, mel_mean, mel_std = get_stft_and_mel_std_and_mean(file_name)
@@ -203,72 +192,128 @@ def get_stft_and_mel_std_and_mean(file_name):
 
     return stft_mean, stft_std, mel_mean, mel_std
 
-def build_dataset(sess, inputs, names):
-    placeholders = []
-    for inp in inputs:
-        placeholders.append(tf.placeholder(inp.dtype, inp.shape))
+def build_hdf5_dataset_from_table(file_name, sess, loader, names, shapes, types, ivocab, stft_mean, stft_std, mel_mean, mel_std):
 
-    with tf.device('/cpu:0'):
-        dataset = tf.contrib.data.Dataset.from_tensor_slices(placeholders)
-        dataset = dataset.repeat()
-        dataset = dataset.shuffle(buffer_size=SHUFFLE_BUFFER_SIZE)
-        dataset = dataset.batch(BATCH_SIZE)
-        iterator = dataset.make_initializable_iterator()
+    """
+    print("Obtaining means and stds....")
+    stft_mean, stft_std, mel_mean, mel_std = get_stft_and_mel_std_and_mean_from_table(file_name)
+    print("Obtained means and stds!")
+    """
 
-        batch_inputs = iterator.get_next()
-        batch_inputs = {na: inp for na, inp in zip(names, batch_inputs)}
-        for name, inp in batch_inputs.items():
-            print(name, inp)
+    # with tf.device('/cpu:0'):
+    def tftables_tensor_generator():
+        while True:
+            loader.q.close()
+            loader_results = loader.dequeue()
+            return_dict = {name: data_entry for name, data_entry in zip(names, loader_results)}
+            
+            # Normalize stft
+            return_dict['stft'] -= stft_mean
+            return_dict['stft'] /= stft_std
 
-        sess.run(iterator.initializer, feed_dict=dict(zip(placeholders, inputs)))
-        batch_inputs['stft'] = tf.cast(batch_inputs['stft'], tf.float32)
-        batch_inputs['mel'] = tf.cast(batch_inputs['mel'], tf.float32)
+            # Normalize mel
+            return_dict['mel'] -= mel_mean
+            return_dict['mel'] /= mel_std
 
-    return batch_inputs
+            tensors_list = [return_dict[name].eval(session=sess) for name in names]
+            tensors_counts = [len(tensors) for tensors in tensors_list]
 
-def load_from_npy(dirname):
-    text = np.load(dirname + 'texts.npy')
-    text_length = np.load(dirname + 'text_lens.npy')
-    print('loading stft')
-    stft = np.load(dirname + 'stfts.npy')
-    print('loading mel')
-    mel = np.load(dirname + 'mels.npy')
-    speech_length = np.load(dirname + 'speech_lens.npy')
+            yield tuple(tensors_list)
 
-    print('normalizing')
+    dataset = tf.data.Dataset.from_generator(tftables_tensor_generator, tuple(types), tuple(shapes))
+    # dataset = dataset.repeat()
+    iterator = dataset.make_initializable_iterator()
+    batch_inputs_from_it = iterator.get_next()
+    
+    batch_inputs = {na: inp for na, inp in zip(names, batch_inputs_from_it)}
+
+    sess.run(iterator.initializer)#, feed_dict=dict(zip(placeholders, inputs)))
+    batch_inputs['stft'] = tf.cast(batch_inputs['stft'], tf.float32)
+    batch_inputs['mel'] = tf.cast(batch_inputs['mel'], tf.float32)
+
+    return batch_inputs, stft_mean, stft_std
+
+def build_dataset_with_hdf5_table(file_name):
+    inputs = list()
+    names = list()
+    shapes = list()
+    types = list()
+
+
+    reader = tftables.open_file(filename=file_name, batch_size=BATCH_SIZE)
+    table_dict = reader.get_batch(
+        path="/data",
+        cyclic=True,
+        ordered=True)
+
+    # stft
+    inputs.append(table_dict[STFTS_COL])
+    names.append("stft")
+    shapes.append(tf.TensorShape([None, 180, 2050]))
+    types.append(tf.float32)
+
+    # mels
+    inputs.append(table_dict[MELS_COL])
+    names.append("mel")
+    shapes.append(tf.TensorShape([None, 180, 160]))
+    types.append(tf.float32)
+
+    # texts
+    inputs.append(tf.to_int32(table_dict[TEXTS_COL]))
+    names.append("text")
+    shapes.append(tf.TensorShape([None, table_dict[TEXTS_COL].shape[1]]))
+    types.append(tf.int32)
+
+    # text_lens
+    inputs.append(tf.to_int32(table_dict[TEXT_LENS_COL]))
+    names.append("text_length")
+    shapes.append(tf.TensorShape([None]))
+    types.append(tf.int32)
+
+    # speech_lens
+    inputs.append(tf.to_int32(table_dict[SPEECH_LENS_COL]))
+    names.append("speech_length")
+    shapes.append(tf.TensorShape([None]))
+    types.append(tf.int32)
+
+    print("inputs: %s" % str(inputs))
+
+    loader = reader.get_fifoloader(queue_size=BUFFER_SIZE, inputs=inputs, threads=1)
+ 
+    return loader, reader, names, shapes, types
+
+def get_stft_and_mel_std_and_mean_from_table(file_name):
+    print("Loading data...")
+    h5py_file = h5py.File(file_name, 'r')
+    print("Loaded data!")
+
     # normalize
     # take a sample to avoid memory errors
-    index = np.random.randint(len(stft), size=100)
+    index = np.random.randint(len(h5py_file["data"]["stfts"]), size=100)
 
-    stft_mean = np.mean(stft[index], axis=(0,1))
-    mel_mean = np.mean(mel[index], axis=(0,1))
-    stft_std = np.std(stft[index], axis=(0,1), dtype=np.float32)
-    mel_std = np.std(mel[index], axis=(0,1), dtype=np.float32)
+    # h5py only supports indexing by lists with indices in order
+    index = sorted(list(set(index.tolist())))
 
-    stft -= stft_mean
-    mel -= mel_mean
-    stft /= stft_std
-    mel /= mel_std
+    print("Getting random indexes from stft...")
+    indexed_stft = h5py_file["data"]["stfts"][index]
+    print("Got random indexes from stft!")
 
-    text = np.array(text, dtype=np.int32)
-    text_length = np.array(text_length, dtype=np.int32)
-    speech_length = np.array(speech_length, dtype=np.int32)
+    print("Taking mean and std deviation for stft...")
+    stft_mean = np.mean(indexed_stft, axis=(0,1))
+    stft_std = np.std(indexed_stft, axis=(0,1), dtype=np.float32)
+    print("Got mean and standard deviation for stft!")
 
-    # NOTE: reconstruct zero frames as paper suggests
-    speech_length = np.ones(text.shape[0], dtype=np.int32) * mel.shape[1]
+    print("Getting random indexes from mel...")
+    indexed_mel = h5py_file["data"]["mels"][index]
+    print("Got random indexes from mel!")
 
-    inputs = list((text, text_length, stft, mel, speech_length))
-    names = ['text', 'text_length', 'stft', 'mel', 'speech_length']
+    print("Taking mean and std deviation for mel...")
+    mel_mean = np.mean(indexed_mel, axis=(0,1))
+    mel_std = np.std(indexed_mel, axis=(0,1), dtype=np.float32)
+    print("Got mean and standard deviation for mel!")
 
-    num_speakers = 1
-
-    if os.path.exists(dirname + 'speakers.npy'):
-        speakers = np.load(dirname + 'speakers.npy')
-        inputs.append(speakers)
-        names.append('speaker')
-        num_speakers = np.max(speakers) + 1
-
-    return inputs, names, num_speakers
+    h5py_file.close()
+    return stft_mean, stft_std, mel_mean, mel_std
 
 def vocab_prompts_to_string(encoded_prompts, ivocab):
     prompts = []

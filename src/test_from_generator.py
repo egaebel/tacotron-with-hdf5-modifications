@@ -99,8 +99,8 @@ def test_from_generator_with_tftables():
     with tf.Session() as sess:
         def tftables_tensor_generator():
             # for i in itertools.count(ITERATIONS // BATCH_SIZE):
-            while True:
-                loader_results = loader.dequeue()
+            while True
+:                loader_results = loader.dequeue()
 
                 print("loader_results length: %d" % len(loader_results))
                 print("loader_results[0]: %s" % loader_results)
