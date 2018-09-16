@@ -105,7 +105,7 @@ def train(model, config, num_steps=1000000):
                 train_writer.add_summary(summary, global_step)
 
                 # detect gradient explosion
-                if loss > 1e8 and global_step > 500:
+                if loss > 1e9 and global_step > 50000:
                     print('loss exploded')
                     break
 

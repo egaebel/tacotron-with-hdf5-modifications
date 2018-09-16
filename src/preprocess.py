@@ -177,6 +177,7 @@ def pad_to_dense(inputs):
     padded = np.stack(padded)
     return padded
 
+INDEX_COL = "index"
 MELS_COL = "mels"
 STFTS_COL = "stfts"
 TEXTS_COL = "texts"
@@ -323,7 +324,7 @@ def preprocess_to_table(data, data_name, sr=16000):
     filename = data_name
 
     # Added
-    example_batch_size = 2 # 5000
+    example_batch_size = 5000
 
     # get count of examples from text file
     num_examples = len(data['prompts'])
@@ -353,6 +354,7 @@ def preprocess_to_table(data, data_name, sr=16000):
     print("max_text_length: %s" % str(padded_texts_for_length.shape))
 
     table_description = {
+        INDEX_COL: tables.Int64Col(),
         MELS_COL: tables.Float16Col(shape=(max_freq_length, 80 * audio.r)),
         STFTS_COL: tables.Float16Col(shape=(max_freq_length, 1025 * audio.r)),
         TEXTS_COL: tables.Int32Col(shape=(max_text_length)),
@@ -386,6 +388,7 @@ def preprocess_to_table(data, data_name, sr=16000):
                 rows = list()
                 for i in range(example_batch_size):
                     row_dict = dict()
+                    row_dict[INDEX_COL] = count - 1
                     row_dict[MELS_COL] = mels[i]
                     row_dict[STFTS_COL] = stfts[i]
                     row_dict[TEXT_LENS_COL] = text_lens[i]
@@ -395,8 +398,10 @@ def preprocess_to_table(data, data_name, sr=16000):
                 append_rows_to_hdf5_table(filename, rows)
 
     rows = list()
+    starting_index = count - 1 - (count % example_batch_size)
     for i in range(count % example_batch_size):
         row_dict = dict()
+        row_dict[INDEX_COL] = starting_index + i
         row_dict[MELS_COL] = mels[i]
         row_dict[STFTS_COL] = stfts[i]
         row_dict[TEXT_LENS_COL] = text_lens[i]
