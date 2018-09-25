@@ -39,7 +39,7 @@ ivocab[0] = '<pad>'
     This contains the speaker id (an int) for each utterance
 """
 def prepare_expanse_truncated():
-    truncated_size = 100
+    truncated_size = 20000
     expanse_root_dir = "../../../audiobook-dataset-creator/src/expanse-data/"
     audio_files_dir = os.path.join(expanse_root_dir, "all-expanse-audio")
     prompts_dir = os.path.join(expanse_root_dir, "all-expanse-sentences")

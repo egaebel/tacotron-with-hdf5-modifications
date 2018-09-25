@@ -71,14 +71,6 @@ def get_stft_and_mel_std_and_mean(file_name):
     return stft_mean, stft_std, mel_mean, mel_std
 
 def build_hdf5_dataset_from_table(file_name, sess, loader, names, shapes, types, ivocab, stft_mean, stft_std, mel_mean, mel_std):
-
-    """
-    print("Obtaining means and stds....")
-    stft_mean, stft_std, mel_mean, mel_std = get_stft_and_mel_std_and_mean_from_table(file_name)
-    print("Obtained means and stds!")
-    """
-
-    # with tf.device('/cpu:0'):
     def tftables_tensor_generator():
         while True:
             loader.q.close()
@@ -94,7 +86,7 @@ def build_hdf5_dataset_from_table(file_name, sess, loader, names, shapes, types,
             return_dict['mel'] /= mel_std
 
             tensors_list = [return_dict[name].eval(session=sess) for name in names]
-            tensors_counts = [len(tensors) for tensors in tensors_list]
+            # tensors_counts = [len(tensors) for tensors in tensors_list]
 
             yield tuple(tensors_list)
 
