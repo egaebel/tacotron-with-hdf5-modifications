@@ -1,5 +1,4 @@
 import tensorflow as tf
-# import tensorflow.contrib.eager as tfe
 import numpy as np
 import sys
 import os
@@ -11,7 +10,7 @@ import argparse
 
 import audio
 
-SAVE_EVERY = 5000
+SAVE_EVERY = 2000
 RESTORE_FROM = None
 
 ANNEALING_STEPS = 500000
@@ -29,25 +28,37 @@ def train(model, config, num_steps=1000000):
         os.path.join(config.data_path, "data"))
     print("Sampled mean and std!")
 
+    
     print("Building dataset...")
     loader, reader, names, shapes, types = data_input.build_dataset_with_hdf5_table(
         os.path.join(config.data_path, "data"))
     print("Built dataset!")
+    
 
     with tf.Session() as sess:
-
-        batch_inputs, stft_mean, stft_std = data_input.build_hdf5_dataset_from_table(
-            os.path.join(config.data_path, "data"), 
-            sess, 
-            loader, 
-            names, 
-            shapes, 
-            types, 
-            ivocab,
-            stft_mean,
-            stft_std,
-            mel_mean,
-            mel_std)
+        if args.hdf5:
+            batch_inputs, stft_mean, stft_std = data_input.build_hdf5_dataset_from_table(
+                os.path.join(config.data_path, "data"), 
+                sess, 
+                loader, 
+                names, 
+                shapes, 
+                types, 
+                ivocab,
+                stft_mean,
+                stft_std,
+                mel_mean,
+                mel_std)
+        else:
+            batch_inputs = data_input.build_tfrecord_dataset(
+                config.tf_record_files,
+                sess,
+                names,
+                ivocab,
+                stft_mean,
+                stft_std,
+                mel_mean,
+                mel_std)
 
         tf.Variable(stft_mean, name='stft_mean')
         tf.Variable(stft_std, name='stft_std')
@@ -147,12 +158,19 @@ if __name__ == '__main__':
     parser.add_argument('-t', '--train-set', default='nancy')
     parser.add_argument('-d', '--debug', type=bool, default=False)
     parser.add_argument('-r', '--restore', type=bool, default=False)
+    parser.add_argument('-f', '--hdf5', type=bool, default=False)
     args = parser.parse_args()
 
     from models.tacotron import Tacotron, Config
     model = Tacotron
     config = Config()
     config.data_path = 'data/%s/' % args.train_set
+    tf_record_files = list()
+    for file_name in os.listdir(config.data_path):
+        if os.path.splitext(file_name)[1] == ".tfrecord":
+            tf_record_files.append(os.path.join(config.data_path, file_name))
+    print("Read .tfrecord files:\n%s" % "\n".join(tf_record_files))
+    config.tf_record_files = tf_record_files
     config.restore = args.restore
     if args.debug: 
         config.save_path = 'debug'

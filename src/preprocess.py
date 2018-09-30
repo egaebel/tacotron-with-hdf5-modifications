@@ -319,6 +319,7 @@ def preprocess(data, data_name, sr=16000):
 
     # save vocabulary
     save_vocab(data_name)
+    print("Saved '%d' records." % count)
 
 def preprocess_to_table(data, data_name, sr=16000):
     filename = data_name
