@@ -155,8 +155,6 @@ def get_stft_and_mel_std_and_mean_from_tfrecords(files):
     indexed_stft = list()
     indexed_mel = list()
     sample_size = int(count * 0.05)
-    # TODO: Remove
-    sample_size = 3
     print("Taking mean and std deviation with sample size: %d" % sample_size)
     random_indexes = set(np.random.randint(low=0, high=count, size=sample_size))
     index = 0
