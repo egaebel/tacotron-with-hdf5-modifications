@@ -116,7 +116,7 @@ def get_stft_and_mel_std_and_mean_from_table(file_name):
 
     # normalize
     # take a sample to avoid memory errors
-    index = np.random.randint(len(h5py_file["data"]["stfts"]), size=100)
+    index = np.random.randint(low=0, high=len(h5py_file["data"]["stfts"]), size=100)
 
     # h5py only supports indexing by lists with indices in order
     index = sorted(list(set(index.tolist())))
@@ -140,6 +140,65 @@ def get_stft_and_mel_std_and_mean_from_table(file_name):
     print("Got mean and standard deviation for mel!")
 
     h5py_file.close()
+    return stft_mean, stft_std, mel_mean, mel_std
+
+def get_stft_and_mel_std_and_mean_from_tfrecords(files):
+    
+    print("Counting number of records from files: %s" % ",".join(files))
+    count = 0
+    for file in files:
+        print("Reading from file: %s" % file)
+        for record in tf.python_io.tf_record_iterator(file):
+            count += 1
+    print("Counted %d records in %d files!" % (count, len(files)))
+
+    indexed_stft = list()
+    indexed_mel = list()
+    sample_size = int(count * 0.05)
+    # TODO: Remove
+    sample_size = 3
+    print("Taking mean and std deviation with sample size: %d" % sample_size)
+    random_indexes = set(np.random.randint(low=0, high=count, size=sample_size))
+    index = 0
+    stat_graph = tf.Graph()
+    with tf.Session(graph=stat_graph) as sess:
+        for file in files:
+            print("Reading from file: %s" % file)
+            for record in tf.python_io.tf_record_iterator(file):
+                features = tf.parse_single_example(
+                    record,
+                    features={
+                        "index": tf.FixedLenFeature([], tf.int64),
+                        "stfts": tf.FixedLenFeature((180, 2050), tf.float32),
+                        "stfts_shape": tf.FixedLenFeature((2), tf.int64),
+                        "mels": tf.FixedLenFeature((180, 160), tf.float32),
+                        "mels_shape": tf.FixedLenFeature((2), tf.int64),
+                        "texts": tf.VarLenFeature(tf.int64),
+                        "text_lens": tf.FixedLenFeature([], tf.int64),
+                        "speech_lens": tf.FixedLenFeature([], tf.int64),           
+                    })
+                if index in random_indexes:
+                    indexed_stft.append(features["stfts"].eval(session=sess))
+                    indexed_mel.append(features["mels"].eval(session=sess))
+                index += 1
+    print("Sampled from random indexes!")
+
+    indexed_stft = np.asarray(indexed_stft)
+    indexed_mel = np.asarray(indexed_mel)
+
+    print("Taking mean and std deviation for stft...")
+    stft_mean = np.mean(indexed_stft, axis=0)
+    stft_std = np.std(indexed_stft, axis=0, dtype=np.float32)
+    print("Got mean and standard deviation for stft!")
+
+    print("Taking mean and std deviation for mel...")
+    mel_mean = np.mean(indexed_mel, axis=0)
+    mel_std = np.std(indexed_mel, axis=0, dtype=np.float32)
+    print("Got mean and standard deviation for mel!")
+
+    print("Returning mean/std deviation shapes:\nstft_mean:%s\nstft_std:%s\nmel_mean:%s\nmel_std:%s\n"
+        % (stft_mean.shape, stft_std.shape, mel_mean.shape, mel_std.shape))
+
     return stft_mean, stft_std, mel_mean, mel_std
 
 def build_tfrecord_dataset(file_names, sess, names, ivocab, stft_mean, stft_std, mel_mean, mel_std):

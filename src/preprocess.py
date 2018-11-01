@@ -223,7 +223,7 @@ def create_hdf5_file(max_freq_length, filename):
     short_names = 'mels', 'stfts'
     filepath = "data/%s/%s" % (filename, "data")
 
-    atoms = [tables.Float16Atom(), tables.Float16Atom()]
+    atoms = [tables.Float32Atom(), tables.Float32Atom()]
     sizes = [
         (0, max_freq_length, 80 * audio.r),
         (0, max_freq_length, 1025 * audio.r)]
@@ -238,7 +238,7 @@ def append_to_hdf5_dataset(mels, stfts, filename):
     inputs = mels, stfts
     short_names = 'mels', 'stfts'
     filepath = "data/%s/%s" % (filename, "data")
-    atoms = [tables.Float16Atom(), tables.Float16Atom()]
+    atoms = [tables.Float32Atom(), tables.Float32Atom()]
 
     tables_file = tables.open_file(filepath, mode='a')
     for short_name, inp, atom in zip(short_names, inputs, atoms):
@@ -279,8 +279,8 @@ def preprocess(data, data_name, sr=16000):
     print("max_freq_length: %s" % str(max_freq_length))
     print("1025*audio.r: %s" % str(1025*audio.r))
 
-    mels = np.zeros((example_batch_size, max_freq_length, 80*audio.r), dtype=np.float16)
-    stfts = np.zeros((example_batch_size, max_freq_length, 1025*audio.r), dtype=np.float16)
+    mels = np.zeros((example_batch_size, max_freq_length, 80*audio.r), dtype=np.float32)
+    stfts = np.zeros((example_batch_size, max_freq_length, 1025*audio.r), dtype=np.float32)
 
     create_hdf5_file(max_freq_length, data_name)
 
@@ -340,8 +340,8 @@ def preprocess_to_table(data, data_name, sr=16000):
 
     text_lens = np.zeros((example_batch_size), dtype=np.int32)
     speech_lens = np.zeros((example_batch_size), dtype=np.int32)
-    mels = np.zeros((example_batch_size, max_freq_length, 80*audio.r), dtype=np.float16)
-    stfts = np.zeros((example_batch_size, max_freq_length, 1025*audio.r), dtype=np.float16)
+    mels = np.zeros((example_batch_size, max_freq_length, 80*audio.r), dtype=np.float32)
+    stfts = np.zeros((example_batch_size, max_freq_length, 1025*audio.r), dtype=np.float32)
 
     texts_for_length = list()
     for text, audio_file in zip(data['prompts'], data['audio_files']):
@@ -356,8 +356,8 @@ def preprocess_to_table(data, data_name, sr=16000):
 
     table_description = {
         INDEX_COL: tables.Int64Col(),
-        MELS_COL: tables.Float16Col(shape=(max_freq_length, 80 * audio.r)),
-        STFTS_COL: tables.Float16Col(shape=(max_freq_length, 1025 * audio.r)),
+        MELS_COL: tables.Float32Col(shape=(max_freq_length, 80 * audio.r)),
+        STFTS_COL: tables.Float32Col(shape=(max_freq_length, 1025 * audio.r)),
         TEXTS_COL: tables.Int32Col(shape=(max_text_length)),
         TEXT_LENS_COL: tables.Int32Col(),
         SPEECH_LENS_COL: tables.Int32Col()
@@ -386,6 +386,7 @@ def preprocess_to_table(data, data_name, sr=16000):
             count += 1
 
             if count % example_batch_size == 0:
+                print("Writing data on count: %d/%d" % (count, num_examples))
                 rows = list()
                 for i in range(example_batch_size):
                     row_dict = dict()
@@ -397,6 +398,7 @@ def preprocess_to_table(data, data_name, sr=16000):
                     rows.append(row_dict)
 
                 append_rows_to_hdf5_table(filename, rows)
+                print("Wrote batch sized '%d' to '%s'" % (example_batch_size, filename))
 
     rows = list()
     starting_index = count - 1 - (count % example_batch_size)
@@ -409,6 +411,8 @@ def preprocess_to_table(data, data_name, sr=16000):
         row_dict[SPEECH_LENS_COL] = speech_lens[i]
         rows.append(row_dict)
     append_rows_to_hdf5_table(filename, rows)
+    print("Final batch, wrote batch sized '%d' to '%s'"
+        % ((count % example_batch_size), filename))
 
     print("texts len: %d" % len(texts))
     update_all_rows_in_hdf5_table(filename, TEXTS_COL, pad_to_dense(texts))

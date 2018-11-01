@@ -24,8 +24,12 @@ def train(model, config, num_steps=1000000):
     config.vocab_size = len(ivocab)
 
     print("Sampling mean and std...")
-    stft_mean, stft_std, mel_mean, mel_std = data_input.get_stft_and_mel_std_and_mean_from_table(
-        os.path.join(config.data_path, "data"))
+    if args.hdf5:
+        stft_mean, stft_std, mel_mean, mel_std = data_input.get_stft_and_mel_std_and_mean_from_table(
+            os.path.join(config.data_path, "data"))
+    else:
+        stft_mean, stft_std, mel_mean, mel_std = data_input.get_stft_and_mel_std_and_mean_from_tfrecords(
+            config.tf_record_files)
     print("Sampled mean and std!")
 
     
@@ -143,7 +147,8 @@ def train(model, config, num_steps=1000000):
                     merged = sess.run(tf.summary.merge(
                         [tf.summary.audio('ideal' + step, ideal[None, :], sr),
                          tf.summary.audio('sample' + step, sample[None, :], sr),
-                         tf.summary.image('attention' + step, attention_plot)]
+                         tf.summary.image('attention' + step, attention_plot),
+                         tf.summary.text('text' + step, inputs['text'])]
                     ))
                     train_writer.add_summary(merged, global_step)
                 if global_step % 50 == 0:
