@@ -32,7 +32,7 @@ def check_tf_records_with_tensorboard(files, data_path, save_path):
         for file_path in files:
             print("Reading file: %s" % file_path)
             for record, i in zip(tf.python_io.tf_record_iterator(file_path), range(count_records([file_path]))):
-                if i % SAVE_EVERY == 0 and i != 0:
+                if i % SAVE_EVERY == 0 and (i != 0 or SAVE_EVERY == 1):
                     print("Iteration %d" % i)
                     features = sess.run(features_in, feed_dict={record_placeholder: record})
                     texts = features["texts"]
@@ -48,7 +48,6 @@ def check_tf_records_with_tensorboard(files, data_path, save_path):
                     # store a sample to listen to
                     ideal = audio.invert_spectrogram(features["stfts"])
                     step = "_" + str(i) + "_"
-                    print("ideal: %s %s %s" % (str(step), str(ideal[None, :]), str(sr)))
                     merged = sess.run(tf.summary.merge(
                         [tf.summary.audio("ideal" + step + "\"" + texts + "\"", ideal[None, :], sr),
                          tf.summary.text("text" + step, tf.convert_to_tensor(texts))]
