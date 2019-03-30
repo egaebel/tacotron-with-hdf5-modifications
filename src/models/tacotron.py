@@ -6,6 +6,7 @@ from tensorflow.contrib.rnn import *
 from tensorflow.contrib.seq2seq.python.ops \
         import attention_wrapper as wrapper, helper, basic_decoder, decoder
 import models.ops as ops
+import numpy as np
 import sys
 import audio
 
@@ -17,17 +18,21 @@ class Config(object):
     embed_dim = 256
     fft_size = 1025
 
-    char_dropout_prob = 0.5
-    audio_dropout_prob = 0.5
+    char_dropout_prob = 0.3
+    audio_dropout_prob = 0.3
 
     num_speakers = 1
     speaker_embed_dim = 16
 
     scheduled_sample = 0.5
 
-    cap_grads = 5
+    cap_grads = 7
 
-    init_lr = 0.0005
+    clip_value_min = 0.0
+    clip_value_max = (1 * 10**8)
+
+    # init_lr = 0.0005
+    init_lr = 0.001
     annealing_rate = 0.5
 
     batch_size = 32
@@ -140,6 +145,13 @@ class Tacotron(object):
             (seq2seq_output, _), attention_state, _ = \
                     decoder.dynamic_decode(dec, maximum_iterations=config.max_decode_iter)
             self.alignments = tf.transpose(attention_state.alignment_history.stack(), [1,0,2])
+            print("seq2seq_output: %s" % str(seq2seq_output))
+            """
+            if not tf.is_nan(seq2seq_output):
+                tf.summary.histogram('seq2seq_output', seq2seq_output)
+            else:
+                print("seq2seq_output is NaN!")
+            """
             tf.summary.histogram('seq2seq_output', seq2seq_output)
 
         # use second CBHG module to process mel features into linear spectogram
@@ -171,7 +183,7 @@ class Tacotron(object):
     def add_train_op(self, loss):
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
 
-        opt = tf.train.AdamOptimizer(learning_rate=self.lr)
+        opt = tf.train.AdamOptimizer(learning_rate=self.lr,)
 
         gradients, variables = zip(*opt.compute_gradients(loss))
         # save selected gradient summaries

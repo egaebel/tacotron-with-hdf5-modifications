@@ -39,7 +39,7 @@ ivocab[0] = '<pad>'
     This contains the speaker id (an int) for each utterance
 """
 def prepare_expanse_truncated():
-    truncated_size = 20000
+    truncated_size = 100
     expanse_root_dir = "../../../audiobook-dataset-creator/src/expanse-data/"
     audio_files_dir = os.path.join(expanse_root_dir, "all-expanse-audio")
     prompts_dir = os.path.join(expanse_root_dir, "all-expanse-sentences")
@@ -47,6 +47,35 @@ def prepare_expanse_truncated():
     for prompt_file_name in sorted(os.listdir(prompts_dir)):
         with open(os.path.join(prompts_dir, prompt_file_name)) as prompt_file:
             prompts.append(list(prompt_file.read()))
+    audio_files = [
+        os.path.join(audio_files_dir, audio_file_name)
+        for audio_file_name in sorted(os.listdir(audio_files_dir))]
+
+    return {'prompts': prompts[:truncated_size], 'audio_files': audio_files[:truncated_size]}
+
+def prepare_expanse_error_thresholded():
+    expanse_root_dir = "../../../audiobook-dataset-creator/src/expanse-data/"
+    audio_files_dir = os.path.join(expanse_root_dir, "all-expanse-audio--error-threshold-0.150000")
+    prompts_dir = os.path.join(expanse_root_dir, "all-expanse-sentences--error-threshold-0.150000")
+    prompts = list()
+    for prompt_file_name in sorted(os.listdir(prompts_dir)):
+        with open(os.path.join(prompts_dir, prompt_file_name)) as prompt_file:
+            prompts.append(prompt_file.read())
+    audio_files = [
+        os.path.join(audio_files_dir, audio_file_name)
+        for audio_file_name in sorted(os.listdir(audio_files_dir))]
+
+    return {'prompts': prompts, 'audio_files': audio_files}
+
+def prepare_expanse_error_thresholded_truncated():
+    truncated_size = 1000
+    expanse_root_dir = "../../../audiobook-dataset-creator/src/expanse-data/"
+    audio_files_dir = os.path.join(expanse_root_dir, "all-expanse-audio--error-threshold-0.200000")
+    prompts_dir = os.path.join(expanse_root_dir, "all-expanse-sentences--error-threshold-0.200000")
+    prompts = list()
+    for prompt_file_name in sorted(os.listdir(prompts_dir)):
+        with open(os.path.join(prompts_dir, prompt_file_name)) as prompt_file:
+            prompts.append(prompt_file.read())
     audio_files = [
         os.path.join(audio_files_dir, audio_file_name)
         for audio_file_name in sorted(os.listdir(audio_files_dir))]
@@ -150,6 +179,8 @@ prepare_functions = {
         'arctic': prepare_arctic,
         'expanse': prepare_expanse,
         'expanse-truncated': prepare_expanse_truncated,
+        'expanse-error': prepare_expanse_error_thresholded,
+        'expanse-error-truncated': prepare_expanse_error_thresholded_truncated,
         'nancy': prepare_nancy,
         'vctk': prepare_vctk
 }
@@ -165,8 +196,7 @@ def process_char(char):
         ivocab[next_index] = char
     return vocab[char]
 
-def pad_to_dense(inputs):
-    max_len = max(r.shape[0] for r in inputs)
+def pad_to_dense(inputs, max_len):
     print("max_len in pad_to_dense: %d" % max_len)
     if len(inputs[0].shape) == 1:
         padded = [np.pad(inp, (0, max_len - inp.shape[0]), 'constant', constant_values=0) \
@@ -179,13 +209,17 @@ def pad_to_dense(inputs):
 
 INDEX_COL = "index"
 MELS_COL = "mels"
+MELS_SHAPE_COL = "mels_shape"
 STFTS_COL = "stfts"
+STFTS_SHAPE_COL = "stfts_shape"
 TEXTS_COL = "texts"
 TEXT_LENS_COL = "text_lens"
 SPEECH_LENS_COL = "speech_lens"
 
 def create_hdf5_table_file(filename, table_description):
-    filepath = "data/%s/%s" % (filename, "data")
+    folder_path = os.path.join("data", filename)
+    _try_mkdir(folder_path)
+    filepath = os.path.join(folder_path, "data")
     tables_file = tables.open_file(filepath, mode="w")
     data_table = tables_file.create_table("/", "data", table_description)
     data_table.close()
@@ -209,11 +243,16 @@ def append_rows_to_hdf5_table(filename, rows_data):
     tables_file.flush()
     tables_file.close()
 
-def update_all_rows_in_hdf5_table(filename, column_name, column_data):
+def update_all_rows_in_hdf5_table(filename, column_name, column_data, start_index=0):
     filepath = "data/%s/%s" % (filename, "data")
     tables_file = tables.open_file(filepath, mode="a")
     data_table = tables_file.get_node("/", "data")
-    data_table.modify_column(start=0, stop=len(column_data), step=1, column=column_data, colname=column_name)
+    data_table.modify_column(
+        start=start_index,
+        stop=(start_index + len(column_data)),
+        step=1,
+        column=column_data,
+        colname=column_name)
     data_table.flush()
     data_table.close()
     tables_file.flush()
@@ -223,7 +262,7 @@ def create_hdf5_file(max_freq_length, filename):
     short_names = 'mels', 'stfts'
     filepath = "data/%s/%s" % (filename, "data")
 
-    atoms = [tables.Float32Atom(), tables.Float32Atom()]
+    atoms = [tables.Float16Atom(), tables.Float16Atom()]
     sizes = [
         (0, max_freq_length, 80 * audio.r),
         (0, max_freq_length, 1025 * audio.r)]
@@ -238,7 +277,7 @@ def append_to_hdf5_dataset(mels, stfts, filename):
     inputs = mels, stfts
     short_names = 'mels', 'stfts'
     filepath = "data/%s/%s" % (filename, "data")
-    atoms = [tables.Float32Atom(), tables.Float32Atom()]
+    atoms = [tables.Float16Atom(), tables.Float16Atom()]
 
     tables_file = tables.open_file(filepath, mode='a')
     for short_name, inp, atom in zip(short_names, inputs, atoms):
@@ -274,13 +313,13 @@ def preprocess(data, data_name, sr=16000):
     text_lens = []
     speech_lens = []
 
-    max_freq_length = audio.maximum_audio_length // (audio.r*audio.hop_length)
+    max_freq_length = audio.maximum_audio_length // (audio.r * audio.hop_length)
     print("num_examples: %s" % str(num_examples))
     print("max_freq_length: %s" % str(max_freq_length))
-    print("1025*audio.r: %s" % str(1025*audio.r))
+    print("1025*audio.r: %s" % str(1025 * audio.r))
 
-    mels = np.zeros((example_batch_size, max_freq_length, 80*audio.r), dtype=np.float32)
-    stfts = np.zeros((example_batch_size, max_freq_length, 1025*audio.r), dtype=np.float32)
+    mels = np.zeros((example_batch_size, max_freq_length, 80*audio.r), dtype=np.float16)
+    stfts = np.zeros((example_batch_size, max_freq_length, 1025*audio.r), dtype=np.float16)
 
     create_hdf5_file(max_freq_length, data_name)
 
@@ -306,7 +345,8 @@ def preprocess(data, data_name, sr=16000):
 
     append_to_hdf5_dataset(mels[:count % example_batch_size], stfts[:count % example_batch_size], data_name)
 
-    inputs = pad_to_dense(texts), np.array(text_lens), np.array(speech_lens)
+    max_len = max(r.shape[0] for r in texts)
+    inputs = pad_to_dense(texts, max_len), np.array(text_lens), np.array(speech_lens)
     short_names = 'texts', 'text_lens', 'speech_lens'
     filepath = "data/%s/%s" % (data_name, "data")
     for short_name, inp in zip(short_names, inputs):
@@ -340,24 +380,33 @@ def preprocess_to_table(data, data_name, sr=16000):
 
     text_lens = np.zeros((example_batch_size), dtype=np.int32)
     speech_lens = np.zeros((example_batch_size), dtype=np.int32)
-    mels = np.zeros((example_batch_size, max_freq_length, 80*audio.r), dtype=np.float32)
-    stfts = np.zeros((example_batch_size, max_freq_length, 1025*audio.r), dtype=np.float32)
+    mels = np.zeros((example_batch_size, max_freq_length, 80*audio.r), dtype=np.float16)
+    stfts = np.zeros((example_batch_size, max_freq_length, 1025*audio.r), dtype=np.float16)
 
+    print("Processing audio...")
     texts_for_length = list()
+    audio_count = 0
     for text, audio_file in zip(data['prompts'], data['audio_files']):
         mel, stft = audio.process_audio(audio_file, sr=sr)
         if mel is not None:
             text = np.array([process_char(c) for c in list(text)])
             texts_for_length.append(text)
+        audio_count += 1
+        if audio_count % 500 == 0:
+            print("Processed %d audio samples..." % audio_count)
+    print("Processed %d audio samples total!" % audio_count)
     max_text_length = max(r.shape[0] for r in texts_for_length)
     print("max_text_length: %d" % max_text_length)
-    padded_texts_for_length = pad_to_dense(texts_for_length)
+    max_len = max(r.shape[0] for r in texts_for_length)
+    padded_texts_for_length = pad_to_dense(texts_for_length, max_len)
     print("max_text_length: %s" % str(padded_texts_for_length.shape))
 
     table_description = {
         INDEX_COL: tables.Int64Col(),
-        MELS_COL: tables.Float32Col(shape=(max_freq_length, 80 * audio.r)),
-        STFTS_COL: tables.Float32Col(shape=(max_freq_length, 1025 * audio.r)),
+        MELS_COL: tables.Float16Col(shape=(max_freq_length, 80 * audio.r)),
+        MELS_SHAPE_COL: tables.Int64Col(shape=(2)),
+        STFTS_COL: tables.Float16Col(shape=(max_freq_length, 1025 * audio.r)),
+        STFTS_SHAPE_COL: tables.Int64Col(shape=(2)),
         TEXTS_COL: tables.Int32Col(shape=(max_text_length)),
         TEXT_LENS_COL: tables.Int32Col(),
         SPEECH_LENS_COL: tables.Int32Col()
@@ -370,6 +419,8 @@ def preprocess_to_table(data, data_name, sr=16000):
     count = 0
     for text, audio_file in tqdm(
             zip(data['prompts'], data['audio_files']), total=num_examples):
+
+        original_text = text
 
         text = [process_char(c) for c in list(text)]
         mel, stft = audio.process_audio(audio_file, sr=sr)
@@ -392,13 +443,17 @@ def preprocess_to_table(data, data_name, sr=16000):
                     row_dict = dict()
                     row_dict[INDEX_COL] = count - 1
                     row_dict[MELS_COL] = mels[i]
+                    row_dict[MELS_SHAPE_COL] = mels[i].shape
                     row_dict[STFTS_COL] = stfts[i]
+                    row_dict[STFTS_SHAPE_COL] = stfts[i].shape
                     row_dict[TEXT_LENS_COL] = text_lens[i]
                     row_dict[SPEECH_LENS_COL] = speech_lens[i]
                     rows.append(row_dict)
 
                 append_rows_to_hdf5_table(filename, rows)
                 print("Wrote batch sized '%d' to '%s'" % (example_batch_size, filename))
+        else:
+            print("mel is None for text: %s" % str(original_text))
 
     rows = list()
     starting_index = count - 1 - (count % example_batch_size)
@@ -406,7 +461,9 @@ def preprocess_to_table(data, data_name, sr=16000):
         row_dict = dict()
         row_dict[INDEX_COL] = starting_index + i
         row_dict[MELS_COL] = mels[i]
+        row_dict[MELS_SHAPE_COL] = mels[i].shape
         row_dict[STFTS_COL] = stfts[i]
+        row_dict[STFTS_SHAPE_COL] = stfts[i].shape
         row_dict[TEXT_LENS_COL] = text_lens[i]
         row_dict[SPEECH_LENS_COL] = speech_lens[i]
         rows.append(row_dict)
@@ -415,13 +472,37 @@ def preprocess_to_table(data, data_name, sr=16000):
         % ((count % example_batch_size), filename))
 
     print("texts len: %d" % len(texts))
-    update_all_rows_in_hdf5_table(filename, TEXTS_COL, pad_to_dense(texts))
+    max_len = max(r.shape[0] for r in texts)
+    i = 0
+    while i < len(texts):
+        update_all_rows_in_hdf5_table(
+            filename,
+            TEXTS_COL,
+            pad_to_dense(texts[i:i + example_batch_size], max_len),
+            start_index=i)
+        i += example_batch_size
+        print("Wrote batch sized '%d' to '%s'" % (example_batch_size, filename))
+    if len(texts) % example_batch_size != 0:
+        prev_i = i - example_batch_size
+        update_all_rows_in_hdf5_table(
+            filename,
+            TEXTS_COL,
+            pad_to_dense(texts[prev_i:prev_i + example_batch_size], max_len),
+            start_index=prev_i)
+        print("Final batch, wrote batch sized '%d' to '%s'"
+            % ((len(texts) % example_batch_size), filename))
 
     if 'speakers' in data:
         np.save('data/%s/speakers.npy' % data_name, data['speakers'], allow_pickle=False)
 
     # save vocabulary
     save_vocab(data_name)
+
+def _try_mkdir(dir_name):
+    try:
+        os.mkdir(dir_name)
+    except:
+        pass
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

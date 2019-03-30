@@ -2,6 +2,7 @@ import tensorflow as tf
 import numpy as np
 import sys
 import os
+import re
 import data_input
 import librosa
 
@@ -10,10 +11,12 @@ import argparse
 
 import audio
 
-SAVE_EVERY = 2000
+SAVE_EVERY = 1000
 RESTORE_FROM = None
 
 ANNEALING_STEPS = 500000
+
+# TODO: Add caching metadata for mean and std and add metadata file to tf record dir to indicate number of records, etc
 
 def train(model, config, num_steps=1000000):
 
@@ -39,7 +42,9 @@ def train(model, config, num_steps=1000000):
     print("Built dataset!")
     
 
-    with tf.Session() as sess:
+    config_proto = tf.ConfigProto()
+    config_proto.gpu_options.allow_growth = True
+    with tf.Session(config=config_proto) as sess:
         if args.hdf5:
             batch_inputs, stft_mean, stft_std = data_input.build_hdf5_dataset_from_table(
                 os.path.join(config.data_path, "data"), 
@@ -137,18 +142,34 @@ def train(model, config, num_steps=1000000):
                     saver.save(sess, 'weights/' + config.save_path, global_step=global_step)
 
                     print('saving sample')
+                    print("stft shape: %s" % str(inputs['stft'][0].shape))
                     # store a sample to listen to
-                    ideal = audio.invert_spectrogram(inputs['stft'][0]*stft_std + stft_mean)
-                    sample = audio.invert_spectrogram(output[0]*stft_std + stft_mean)
+                    ideal = audio.invert_spectrogram(inputs['stft'][0] * stft_std + stft_mean)
+                    sample = audio.invert_spectrogram(output[0] * stft_std + stft_mean)
                     attention_plot = data_input.generate_attention_plot(alignments[0])
-                    step = '_' + str(global_step)
+                    step = '_' + str(global_step) + '_'
+                    # Remove pad words
+                    text_string = texts = "".join(
+                        filter(
+                            lambda x: x != "<pad>", 
+                            [ivocab[word] for word in inputs['text'][0]]))
+                    # Remove unicode chars, replacing them with 0
+                    text_string = "".join(
+                        map(
+                            lambda x: "0" 
+                                # This is the REGEX specified in name_scope in ops.py in tensorflow
+                                if re.match("[A-Za-z0-9_.\\-/ ]", x) is None 
+                                else x, 
+                            text_string))
+                    text_string = text_string.strip()
+                    quoted_text_string = "\"" + text_string + "\""
                     print("ideal: %s %s %s" % (str(step), str(ideal[None, :]), str(sr)))
                     print("sample: %s %s %s" % (str(step), str(sample[None, :]), str(sr)))
                     merged = sess.run(tf.summary.merge(
-                        [tf.summary.audio('ideal' + step, ideal[None, :], sr),
-                         tf.summary.audio('sample' + step, sample[None, :], sr),
+                        [tf.summary.audio('ideal' + step + text_string, ideal[None, :], sr),
+                         tf.summary.audio('sample' + step + text_string, sample[None, :], sr),
                          tf.summary.image('attention' + step, attention_plot),
-                         tf.summary.text('text' + step, inputs['text'])]
+                         tf.summary.text('text' + step, tf.convert_to_tensor(quoted_text_string))]
                     ))
                     train_writer.add_summary(merged, global_step)
                 if global_step % 50 == 0:
@@ -176,6 +197,7 @@ if __name__ == '__main__':
             tf_record_files.append(os.path.join(config.data_path, file_name))
     print("Read .tfrecord files:\n%s" % "\n".join(tf_record_files))
     config.tf_record_files = tf_record_files
+
     config.restore = args.restore
     if args.debug: 
         config.save_path = 'debug'

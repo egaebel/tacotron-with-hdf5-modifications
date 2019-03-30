@@ -21,6 +21,7 @@ class InferenceHelper(CustomHelper):
         return (finished, next_inputs, state)
 
     def __init__(self, batch_size, out_size):
+        super().__init__(self._initialize_fn, self._sample_fn, self._next_inputs_fn)
         self._batch_size = batch_size
         self._out_size = out_size
 
@@ -34,7 +35,7 @@ def highway(inputs, units=128):
             units=units,
             activation=tf.nn.sigmoid,
     )
-    # TODO update bias initial value
+    # TODO(barronalex): Update bias initial value.
 
     H = tf.layers.dense(
             inputs,

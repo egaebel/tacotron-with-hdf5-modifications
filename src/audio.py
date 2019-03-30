@@ -9,8 +9,15 @@ import tensorflow as tf
 
 n_fft = 2048
 win_length = 1200
-hop_length = int(win_length/4)
-maximum_audio_length = 108000
+hop_length = int(win_length / 4)
+# Increased maximum audio length, I was missing out on > 20,000
+#       samples because of this.
+# I believe that this has changed the dimension of stfts and mels
+#       to [504, 2050] and [504, 160], respectively, up from
+#       [180, 2050] and [180, 160].
+# maximum_audio_length = 108000
+maximum_audio_length = 108000 + 300 * 648
+use_maximum_audio_length = False
 
 # NOTE: If you change the decoder output width r, make sure to rerun preprocess.py.
 # it stores the arrays in a different format based on this value
@@ -22,24 +29,37 @@ r = 2
 # we then reshape these frames back to the normal overlapping representation to be outputted
 def reshape_frames(signal, forward=True):
     if forward:
-        split_points = np.arange(4*r, signal.shape[1]+1, step=4*r)
+        split_points = np.arange(4 * r, signal.shape[1] + 1, step=(4 * r))
         splits = np.split(signal, split_points, axis=1)
         new_signal = np.concatenate([np.concatenate(np.split(s, r, axis=1), axis=0) for s in splits[:-1]], axis=1)
         return new_signal.T
     else:
-        signal = np.reshape(signal, (-1, int(signal.shape[1]/r)))
-        split_points = np.arange(4*r, signal.shape[0]+1, step=4*r)
+        signal = np.reshape(signal, (-1, int(int(signal.shape[1]) / r)))
+        split_points = np.arange(4 * r, signal.shape[0]+1, step=(4 * r))
         splits = np.split(signal, split_points, axis=0)
-        new_signal = np.concatenate([np.concatenate(np.split(s, s.shape[0]/r, axis=0), axis=1) for s in splits[:-1]], axis=0)
+        new_signal = np.concatenate([np.concatenate(np.split(s, s.shape[0] / r, axis=0), axis=1) for s in splits[:-1]], axis=0)
         new_signal = np.reshape(new_signal, (-1, signal.shape[1]))
         return new_signal
         
 
 def process_audio(fname, n_fft=2048, win_length=1200, hop_length=300, sr=16000):
-    wave, sr = librosa.load(fname, mono=True, sr=sr)
+    try:
+        wave, sr = librosa.load(fname, mono=True, sr=sr)
+    except Exception as e:
+        print("process_audio called with fname: ||%s||" % fname)
+        print("Error on librosa.load.\nException was: %s" % str(e))
+        return None, None
 
     # trim initial silence
     wave, _ = librosa.effects.trim(wave)
+
+    """
+    print("4*r: %s" % str(4 * r))
+    print("math.ceil(maximum_audio_length / hop_length)")
+    print(math.ceil(maximum_audio_length / hop_length))
+    print("math.ceil(maximum_audio_length / hop_length) % 4*r:")
+    print(math.ceil(maximum_audio_length / hop_length) % 4*r)
+    """
 
     # first pad the audio to the maximum length
     # we ensure it is a multiple of 4r so it works with max frames
@@ -48,6 +68,7 @@ def process_audio(fname, n_fft=2048, win_length=1200, hop_length=300, sr=16000):
         wave = np.pad(wave,
                 (0,maximum_audio_length - wave.shape[0]), 'constant', constant_values=0)
     else:
+        print("wave.shape[0] > maximum_audio_length: %s > %s" % (str(wave.shape[0]), str(maximum_audio_length)))
         return None, None
 
     pre_emphasis = 0.97

@@ -84,8 +84,9 @@ def inspect_tf_record_file(file_path, result_chunking=1):
 
 
 if __name__ == '__main__':
-    # convert_records("data/expanse-truncated/data")
-    convert_records("data/expanse/data")
+    convert_records("data/expanse-truncated/data")
+    # convert_records("data/expanse/data")
+    # convert_records("data/expanse-error/data")
     print("Done!")
 
     # inspect_tf_record_file("data/expanse-truncated/data-0.tfrecord", 10000)

@@ -1,6 +1,8 @@
 from __future__ import print_function
 from __future__ import division
 
+from multiprocessing import Pool
+
 import tensorflow as tf
 import numpy as np
 import pickle as pkl
@@ -21,10 +23,17 @@ TEXTS_COL = "texts"
 TEXT_LENS_COL = "text_lens"
 SPEECH_LENS_COL = "speech_lens"
 
-BATCH_SIZE = 32
-BUFFER_SIZE = 1024
-SHUFFLE_BUFFER_SIZE = 10000
+# MEL_STFT_FIRST_DIMENSION = 180
+MEL_STFT_FIRST_DIMENSION = 504
 
+# Had to reduce batch size due to longer audio sample lengths
+# BATCH_SIZE = 32
+BATCH_SIZE = 16
+BUFFER_SIZE = 1024
+SHUFFLE_BUFFER_SIZE = 500
+
+
+# TODO: This probably needs to be MUCH larger
 MAX_TEXT_LEN = 140
 
 def build_hdf5_dataset_from_table(file_name, sess, loader, names, shapes, types, ivocab, stft_mean, stft_std, mel_mean, mel_std):
@@ -76,13 +85,13 @@ def build_dataset_with_hdf5_table(file_name):
     # stft
     inputs.append(table_dict[STFTS_COL])
     names.append("stft")
-    shapes.append(tf.TensorShape([None, 180, 2050]))
+    shapes.append(tf.TensorShape([None, MEL_STFT_FIRST_DIMENSION, 2050]))
     types.append(tf.float32)
 
     # mels
     inputs.append(table_dict[MELS_COL])
     names.append("mel")
-    shapes.append(tf.TensorShape([None, 180, 160]))
+    shapes.append(tf.TensorShape([None, MEL_STFT_FIRST_DIMENSION, 160]))
     types.append(tf.float32)
 
     # texts
@@ -142,8 +151,9 @@ def get_stft_and_mel_std_and_mean_from_table(file_name):
     h5py_file.close()
     return stft_mean, stft_std, mel_mean, mel_std
 
-def get_stft_and_mel_std_and_mean_from_tfrecords(files):
-    
+def count_records(files, parallelize=False):
+    if parallelize:
+        return count_records_parallel(files)
     print("Counting number of records from files: %s" % ",".join(files))
     count = 0
     for file in files:
@@ -151,48 +161,122 @@ def get_stft_and_mel_std_and_mean_from_tfrecords(files):
         for record in tf.python_io.tf_record_iterator(file):
             count += 1
     print("Counted %d records in %d files!" % (count, len(files)))
+    return count
 
-    indexed_stft = list()
-    indexed_mel = list()
-    sample_size = int(count * 0.05)
-    print("Taking mean and std deviation with sample size: %d" % sample_size)
-    random_indexes = set(np.random.randint(low=0, high=count, size=sample_size))
-    index = 0
-    stat_graph = tf.Graph()
-    with tf.Session(graph=stat_graph) as sess:
-        for file in files:
-            print("Reading from file: %s" % file)
-            for record in tf.python_io.tf_record_iterator(file):
-                features = tf.parse_single_example(
-                    record,
-                    features={
-                        "index": tf.FixedLenFeature([], tf.int64),
-                        "stfts": tf.FixedLenFeature((180, 2050), tf.float32),
-                        "stfts_shape": tf.FixedLenFeature((2), tf.int64),
-                        "mels": tf.FixedLenFeature((180, 160), tf.float32),
-                        "mels_shape": tf.FixedLenFeature((2), tf.int64),
-                        "texts": tf.VarLenFeature(tf.int64),
-                        "text_lens": tf.FixedLenFeature([], tf.int64),
-                        "speech_lens": tf.FixedLenFeature([], tf.int64),           
-                    })
-                if index in random_indexes:
-                    indexed_stft.append(features["stfts"].eval(session=sess))
-                    indexed_mel.append(features["mels"].eval(session=sess))
-                index += 1
+def record_counting_fn(file):
+    print("Starting count on file: %s" % file)
+    count = 0
+    for record in tf.python_io.tf_record_iterator(file):
+        count += 1
+        if count % 1000 == 0:
+            print("On record %d on file: %s" % (count, file))
+    print("Finished counting records in: %s" % file)
+    return count
+
+def count_records_parallel(files):
+    pool = Pool()
+    print("Counting number of records from files: %s" % ",".join(files))
+    counts = pool.map(record_counting_fn, files)
+    pool.close()
+        
+    total_count = sum(counts)
+    print("Counted %d records in %d files!" % (total_count, len(files)))
+    return total_count
+
+def get_stft_and_mel_std_and_mean_from_tfrecords(files):
+    
+    with tf.device('/cpu:0'):
+        count = count_records(files)
+        print("Counted %d records" % count)
+        # sample_size = int(count * 0.005)
+        sample_size = int(count * 0.05)
+        print("Taking mean and std deviation with sample size: %d" % sample_size)
+        random_indexes = set(np.random.randint(low=0, high=count, size=sample_size))
+        index = 0
+    
+        stat_graph = tf.Graph()
+        with tf.Session(graph=stat_graph) as sess:
+            sum_count = 0
+            stft_sum = np.zeros(shape=(MEL_STFT_FIRST_DIMENSION, 2050))
+            mel_sum = np.zeros(shape=(MEL_STFT_FIRST_DIMENSION, 160))
+            record_placeholder = tf.placeholder(tf.string)
+            features = tf.parse_single_example(
+                record_placeholder,
+                features={
+                    "index": tf.FixedLenFeature([], tf.int64),
+                    "stfts": tf.FixedLenFeature((MEL_STFT_FIRST_DIMENSION, 2050), tf.float32),
+                    "stfts_shape": tf.FixedLenFeature((2), tf.int64),
+                    "mels": tf.FixedLenFeature((MEL_STFT_FIRST_DIMENSION, 160), tf.float32),
+                    "mels_shape": tf.FixedLenFeature((2), tf.int64),
+                    "texts": tf.VarLenFeature(tf.int64),
+                    "text_lens": tf.FixedLenFeature([], tf.int64),
+                    "speech_lens": tf.FixedLenFeature([], tf.int64),           
+                })
+            for file in files:
+                print("Reading from file: %s" % file)
+                for record in tf.python_io.tf_record_iterator(file):        
+                    if index in random_indexes:
+                        # indexed_stft.append(features["stfts"].eval(session=sess))
+                        # indexed_mel.append(features["mels"].eval(session=sess))
+                        # print("stfts: %s" % str(features["stfts"]))
+                        # print("stfts: %s" % str(features["stfts"].eval(feed_dict={record_placeholder: record}, session=sess)))
+                        stft_sum += features["stfts"].eval(feed_dict={record_placeholder: record}, session=sess)
+                        mel_sum += features["mels"].eval(feed_dict={record_placeholder: record}, session=sess)
+                        sum_count += 1
+                        if sum_count == len(random_indexes):
+                            break
+                    index += 1
+                if sum_count == len(random_indexes):
+                    break
+            stft_mean = stft_sum / sample_size
+            mel_mean = mel_sum / sample_size
+            print("Computed means!\n\n\n")
+
+            mean_sum_count = 0
+            stft_mean_sum = np.zeros(shape=(MEL_STFT_FIRST_DIMENSION, 2050))
+            mel_mean_sum = np.zeros(shape=(MEL_STFT_FIRST_DIMENSION, 160))
+            record_placeholder_2 = tf.placeholder(tf.string)
+            features = tf.parse_single_example(
+                record_placeholder_2,
+                features={
+                    "index": tf.FixedLenFeature([], tf.int64),
+                    "stfts": tf.FixedLenFeature((MEL_STFT_FIRST_DIMENSION, 2050), tf.float32),
+                    "stfts_shape": tf.FixedLenFeature((2), tf.int64),
+                    "mels": tf.FixedLenFeature((MEL_STFT_FIRST_DIMENSION, 160), tf.float32),
+                    "mels_shape": tf.FixedLenFeature((2), tf.int64),
+                    "texts": tf.VarLenFeature(tf.int64),
+                    "text_lens": tf.FixedLenFeature([], tf.int64),
+                    "speech_lens": tf.FixedLenFeature([], tf.int64),           
+                })
+            for file in files:
+                print("Reading from file: %s" % file)
+                for record in tf.python_io.tf_record_iterator(file):
+                    if index in random_indexes:
+                        stft_mean_sum += np.power(features["stfts"].eval(feed_dict={record_placeholder_2: record}, session=sess) - stft_mean, 2)
+                        mel_mean_sum += np.power(features["mels"].eval(feed_dict={record_placeholder_2: record}, session=sess) - mel_mean, 2)
+                        mean_sum_count += 1
+                        if mean_sum_count == len(random_indexes):
+                            break
+                if mean_sum_count == len(random_indexes):
+                    break
+            stft_std = np.sqrt(stft_mean_sum / (sample_size - 1))
+            mel_std = np.sqrt(mel_mean_sum / (sample_size - 1))
+            print("Computed standard deviations!\n\n\n")
+
     print("Sampled from random indexes!")
 
-    indexed_stft = np.asarray(indexed_stft)
-    indexed_mel = np.asarray(indexed_mel)
+    # indexed_stft = np.asarray(indexed_stft)
+    # indexed_mel = np.asarray(indexed_mel)
 
-    print("Taking mean and std deviation for stft...")
-    stft_mean = np.mean(indexed_stft, axis=0)
-    stft_std = np.std(indexed_stft, axis=0, dtype=np.float32)
-    print("Got mean and standard deviation for stft!")
+    # print("Taking mean and std deviation for stft...")
+    # stft_mean = np.mean(indexed_stft, axis=0)
+    # stft_std = np.std(indexed_stft, axis=0, dtype=np.float32)
+    # print("Got mean and standard deviation for stft!")
 
-    print("Taking mean and std deviation for mel...")
-    mel_mean = np.mean(indexed_mel, axis=0)
-    mel_std = np.std(indexed_mel, axis=0, dtype=np.float32)
-    print("Got mean and standard deviation for mel!")
+    # print("Taking mean and std deviation for mel...")
+    # mel_mean = np.mean(indexed_mel, axis=0)
+    # mel_std = np.std(indexed_mel, axis=0, dtype=np.float32)
+    # print("Got mean and standard deviation for mel!")
 
     print("Returning mean/std deviation shapes:\nstft_mean:%s\nstft_std:%s\nmel_mean:%s\nmel_std:%s\n"
         % (stft_mean.shape, stft_std.shape, mel_mean.shape, mel_std.shape))
@@ -216,9 +300,9 @@ def build_tfrecord_dataset(file_names, sess, names, ivocab, stft_mean, stft_std,
             serialized_example,
             features={
                 "index": tf.FixedLenFeature([], tf.int64),
-                "stfts": tf.FixedLenFeature((180, 2050), tf.float32),
+                "stfts": tf.FixedLenFeature((MEL_STFT_FIRST_DIMENSION, 2050), tf.float32),
                 "stfts_shape": tf.FixedLenFeature((2), tf.int64),
-                "mels": tf.FixedLenFeature((180, 160), tf.float32),
+                "mels": tf.FixedLenFeature((MEL_STFT_FIRST_DIMENSION, 160), tf.float32),
                 "mels_shape": tf.FixedLenFeature((2), tf.int64),
                 "texts": tf.VarLenFeature(tf.int64),
                 "text_lens": tf.FixedLenFeature([], tf.int64),
@@ -243,7 +327,7 @@ def build_tfrecord_dataset(file_names, sess, names, ivocab, stft_mean, stft_std,
             features["stfts_shape"], 
             features["mels"], # mels,
             features["mels_shape"], 
-            tf.sparse_to_dense(texts.indices, texts.dense_shape, texts.values), 
+            tf.sparse_to_dense(texts.indices, texts.dense_shape, texts.values),
             text_lens, 
             speech_lens)
 
@@ -283,8 +367,8 @@ def vocab_prompts_to_string(encoded_prompts, ivocab):
 
 def pad(text, max_len, pad_val):
     return np.array(
-        [np.pad(t, (0, max_len - len(t)), 'constant', constant_values=pad_val) for t in text]
-    , dtype=np.int32)
+        [np.pad(t, (0, max_len - len(t)), 'constant', constant_values=pad_val) for t in text],
+        dtype=np.int32)
 
 def load_prompts(prompts, ivocab):
     vocab = {v: k for k,v in ivocab.items()}
@@ -305,7 +389,7 @@ def load_prompts(prompts, ivocab):
     return batches
         
 def load_meta(data_path):
-    with open('%smeta.pkl' % data_path, 'rb') as vf:
+    with open(os.path.join(data_path, "meta.pkl"), 'rb') as vf:
         meta = pkl.load(vf)
     return meta
 
